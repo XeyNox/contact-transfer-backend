@@ -1,56 +1,112 @@
-mod config;
-mod db;
-mod email;
-mod models;
-mod handlers;
-mod errors;
+//! Backend API SMP Moules
+//!
+//! API REST pour l'application Android de collecte de contacts
+//! lors des salons professionnels.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      HTTP Layer                              │
+//! │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+//! │  │   /health   │  │/api/export  │  │ /api/send-history   │  │
+//! │  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+//! └─────────┼────────────────┼───────────────────┼──────────────┘
+//!           │                │                   │
+//! ┌─────────┴────────────────┴───────────────────┴──────────────┐
+//! │                     Handlers (thin)                          │
+//! │  - Validation                                                │
+//! │  - Auth check                                                │
+//! │  - Response formatting                                       │
+//! └─────────────────────────────┬────────────────────────────────┘
+//!                               │
+//! ┌─────────────────────────────┴────────────────────────────────┐
+//! │                     Domain Layer                             │
+//! │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+//! │  │ContactFiche  │  │    Email     │  │   Templates      │   │
+//! │  └──────────────┘  └──────────────┘  └──────────────────┘   │
+//! └─────────────────────────────┬────────────────────────────────┘
+//!                               │
+//! ┌─────────────────────────────┴────────────────────────────────┐
+//! │                   Email Provider (trait)                     │
+//! │                           │                                  │
+//! │              ┌────────────┴────────────┐                     │
+//! │              │     ResendProvider      │                     │
+//! │              └─────────────────────────┘                     │
+//! └──────────────────────────────────────────────────────────────┘
+//! ```
 
-use actix_web::{web, App, HttpServer, middleware};
-use sqlx::sqlite::SqlitePool;
-use std::env;
+mod config;
+mod domain;
+mod email;
+mod handlers;
+mod middleware;
+
+use actix_web::{web, App, HttpServer, middleware as actix_middleware};
+use std::sync::Arc;
+use tracing::{info, Level};
+use tracing_subscriber::FmtSubscriber;
+
+use crate::config::AppConfig;
+use crate::email::{EmailProvider, ResendProvider};
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Initialiser le logging
-    env_logger::init_from_env(env_logger::Env::default().default_filter_or("info"));
-    
-    dotenv::dotenv().ok();
-    
-    // PERSONNALISER : Ajouter ici d'autres logs si nécessaire
-    log::info!("🚀 Démarrage du serveur de transfert de contacts...");
-    
-    // Initialiser la base de données
-    let database_url = env::var("DATABASE_URL")
-        .expect("DATABASE_URL doit être défini");
-    
-    let pool = SqlitePool::connect(&database_url)
-        .await
-        .expect("Impossible de se connecter à la base de données");
-    
-    // Exécuter les migrations
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("Impossible d'exécuter les migrations");
-    
-    let host = env::var("SERVER_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("SERVER_PORT")
-        .unwrap_or_else(|_| "8080".to_string())
-        .parse::<u16>()
-        .expect("SERVER_PORT doit être un nombre");
-    
-    log::info!("📡 Serveur écoute sur {}:{}", host, port);
-    
-    let server_addr = format!("{}:{}", host, port);
+    // 1. Initialiser le logging
+    init_tracing();
+
+    // 2. Charger la configuration
+    let config = AppConfig::from_env().expect("Erreur de configuration");
+    let config = Arc::new(config);
+
+    info!(
+        host = %config.server.host,
+        port = %config.server.port,
+        "Démarrage du serveur SMP Backend"
+    );
+
+    // 3. Créer le provider email
+    let email_provider: Arc<dyn EmailProvider> = Arc::new(ResendProvider::new(&config.email));
+
+    info!(
+        provider = %email_provider.provider_name(),
+        "Provider email initialisé"
+    );
+
+    // 4. Démarrer le serveur
+    let server_config = config.clone();
     
     HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(pool.clone()))
-            .wrap(middleware::Logger::default())
-            // PERSONNALISER : Ajouter ici vos middlewares (CORS, authentification, etc.)
-            .configure(handlers::routes)
+            // Middleware
+            .wrap(actix_middleware::Logger::default())
+            .wrap(actix_middleware::Compress::default())
+            
+            // State partagé
+            .app_data(web::Data::new(config.clone()))
+            .app_data(web::Data::new(email_provider.clone()))
+            
+            // Configuration JSON
+            .app_data(web::JsonConfig::default().limit(10 * 1024 * 1024)) // 10MB limit
+            
+            // Routes
+            .route("/health", web::get().to(handlers::health_check))
+            .route("/api/export-fiches", web::post().to(handlers::export_fiches))
+            .route("/api/send-history-email", web::post().to(handlers::send_history_email))
     })
-    .bind(&server_addr)?
+    .bind((server_config.server.host.as_str(), server_config.server.port))?
     .run()
     .await
+}
+
+/// Initialise le système de logging/tracing
+fn init_tracing() {
+    FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_file(false)
+        .with_line_number(false)
+        .compact()
+        .init();
 }
