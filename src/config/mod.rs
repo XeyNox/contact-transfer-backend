@@ -65,7 +65,7 @@ impl AppConfig {
                 from_name: std::env::var("EMAIL_FROM_NAME")
                     .unwrap_or_else(|_| "SMP Moules".to_string()),
                 from_email: std::env::var("EMAIL_FROM_ADDRESS")
-                    .unwrap_or_else(|_| "noreply@smp-moules.com".to_string()),
+                    .unwrap_or_else(|_| "onboarding@resend.dev".to_string()),
                 default_recipient: std::env::var("DEFAULT_EXPORT_EMAIL")
                     .unwrap_or_else(|_| "commercial@smp-moules.com".to_string()),
             },
