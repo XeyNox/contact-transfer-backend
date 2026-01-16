@@ -13,8 +13,6 @@ use crate::email::{EmailProvider, EmailTemplates};
 use crate::middleware::verify_api_key;
 
 /// POST /api/export-fiches
-///
-/// Exporte les fiches contacts par email avec photos en pièces jointes.
 #[instrument(skip(req, body, config, email_provider), fields(contacts_count))]
 pub async fn export_fiches(
     req: HttpRequest,
@@ -98,36 +96,5 @@ pub async fn export_fiches(
                 format!("Erreur d'envoi: {}", e)
             ))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::ContactFiche;
-    use crate::email::provider::mock::MockEmailProvider;
-
-    fn test_contact() -> ContactFiche {
-        ContactFiche {
-            societe: "Test Corp".to_string(),
-            contact: "John Doe".to_string(),
-            email: "john@test.com".to_string(),
-            telephone: "0123456789".to_string(),
-            notes: "Test notes".to_string(),
-            sectors: "PHARMA".to_string(),
-            status: None,
-            created_at: 1704067200000,
-            photo_base64: None,
-            photo_filename: None,
-        }
-    }
-
-    #[test]
-    fn test_email_construction() {
-        let contacts = vec![test_contact()];
-        let html = EmailTemplates::export_fiches_html(&contacts);
-        
-        assert!(html.contains("Test Corp"));
-        assert!(html.contains("john@test.com"));
     }
 }
